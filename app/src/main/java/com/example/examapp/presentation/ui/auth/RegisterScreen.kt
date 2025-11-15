@@ -32,9 +32,20 @@ fun RegisterScreen(
     val uiState by viewModel.uiState.collectAsState()
 
     // Navegar cuando el registro sea exitoso
-    LaunchedEffect(uiState.isAuthenticated) {
-        if (uiState.isAuthenticated && uiState.user != null) {
+    // Usamos una clave para evitar que se ejecute múltiples veces
+    var hasNavigated by remember { mutableStateOf(false) }
+    
+    LaunchedEffect(uiState.isAuthenticated, uiState.user) {
+        if (uiState.isAuthenticated && uiState.user != null && !hasNavigated && !uiState.isLoading) {
+            hasNavigated = true
             onRegisterSuccess()
+        }
+    }
+    
+    // Resetear la bandera cuando el estado cambia a no autenticado
+    LaunchedEffect(uiState.isAuthenticated) {
+        if (!uiState.isAuthenticated) {
+            hasNavigated = false
         }
     }
 

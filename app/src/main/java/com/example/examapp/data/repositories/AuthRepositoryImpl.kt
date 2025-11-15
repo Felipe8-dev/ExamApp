@@ -23,7 +23,7 @@ class AuthRepositoryImpl @Inject constructor(
         fullName: String,
         isProfessor: Boolean
     ): Flow<Result<User>> = flow {
-        try {
+        val result = runCatching {
             val role = if (isProfessor) "profesor" else "estudiante"
             
             // Registrar usuario
@@ -35,8 +35,7 @@ class AuthRepositoryImpl @Inject constructor(
             )
             
             if (signUpResult.isFailure) {
-                emit(Result.failure(signUpResult.exceptionOrNull()!!))
-                return@flow
+                throw signUpResult.exceptionOrNull() ?: Exception("Error al registrar usuario")
             }
             
             // Esperar un momento para que el trigger cree el perfil
@@ -46,8 +45,7 @@ class AuthRepositoryImpl @Inject constructor(
             val profileResult = authRemoteDataSource.getCurrentUserProfile()
             
             if (profileResult.isSuccess) {
-                val user = profileResult.getOrNull()!!.toDomain()
-                emit(Result.success(user))
+                profileResult.getOrNull()!!.toDomain()
             } else {
                 // Si el perfil no existe, intentar crearlo manualmente
                 val userId = signUpResult.getOrNull()?.id
@@ -60,99 +58,170 @@ class AuthRepositoryImpl @Inject constructor(
                     )
                     
                     if (createProfileResult.isSuccess) {
-                        val user = createProfileResult.getOrNull()!!.toDomain()
-                        emit(Result.success(user))
+                        createProfileResult.getOrNull()!!.toDomain()
                     } else {
-                        emit(Result.failure(Exception("Error al crear perfil de usuario")))
+                        val errorMessage = createProfileResult.exceptionOrNull()?.message 
+                            ?: "Error desconocido al crear perfil"
+                        throw Exception("Error al crear perfil de usuario: $errorMessage")
                     }
                 } else {
-                    emit(Result.failure(Exception("Error al obtener ID de usuario")))
+                    throw Exception("Error al obtener ID de usuario")
                 }
             }
-        } catch (e: Exception) {
-            emit(Result.failure(e))
         }
+        
+        emit(result.fold(
+            onSuccess = { user -> Result.success(user) },
+            onFailure = { e -> Result.failure(e) }
+        ))
     }
     
     override suspend fun signIn(email: String, password: String): Flow<Result<User>> = flow {
-        try {
+        val result = runCatching {
             val signInResult = authRemoteDataSource.signInWithEmail(email, password)
             
             if (signInResult.isFailure) {
-                emit(Result.failure(signInResult.exceptionOrNull()!!))
-                return@flow
+                throw signInResult.exceptionOrNull() ?: Exception("Error al iniciar sesión")
+            }
+            
+            // Obtener el usuario autenticado para acceder a sus metadatos
+            val userInfo = signInResult.getOrNull()
+            if (userInfo == null) {
+                throw Exception("No se pudo obtener información del usuario")
             }
             
             // Obtener perfil
             val profileResult = authRemoteDataSource.getCurrentUserProfile()
             
             if (profileResult.isSuccess) {
-                val user = profileResult.getOrNull()!!.toDomain()
-                emit(Result.success(user))
+                profileResult.getOrNull()!!.toDomain()
             } else {
-                emit(Result.failure(Exception("No se pudo obtener el perfil del usuario")))
+                // Si el perfil no existe, intentar crearlo usando los metadatos del usuario
+                // Obtener metadatos del usuario
+                val metadataResult = authRemoteDataSource.getUserMetadata()
+                val metadata = metadataResult.getOrNull() ?: mapOf(
+                    "full_name" to "Usuario",
+                    "role" to "estudiante"
+                )
+                
+                val fullName = metadata["full_name"] ?: "Usuario"
+                val role = metadata["role"] ?: "estudiante"
+                val userEmail = userInfo.email ?: email
+                
+                // Intentar crear el perfil
+                val createProfileResult = authRemoteDataSource.createProfile(
+                    userId = userInfo.id,
+                    email = userEmail,
+                    fullName = fullName,
+                    role = role
+                )
+                
+                if (createProfileResult.isSuccess) {
+                    createProfileResult.getOrNull()!!.toDomain()
+                } else {
+                    throw Exception("No se pudo obtener ni crear el perfil del usuario: ${createProfileResult.exceptionOrNull()?.message}")
+                }
             }
-        } catch (e: Exception) {
-            emit(Result.failure(e))
         }
+        
+        emit(result.fold(
+            onSuccess = { user -> Result.success(user) },
+            onFailure = { e -> Result.failure(e) }
+        ))
     }
     
     override suspend fun signInWithGoogle(): Flow<Result<Unit>> = flow {
-        try {
-            val result = authRemoteDataSource.signInWithGoogle()
-            emit(result)
-        } catch (e: Exception) {
-            emit(Result.failure(e))
+        val result = runCatching {
+            authRemoteDataSource.signInWithGoogle().getOrThrow()
         }
+        emit(result.fold(
+            onSuccess = { Result.success(it) },
+            onFailure = { e -> Result.failure(e) }
+        ))
     }
     
     override suspend fun signInWithGitHub(): Flow<Result<Unit>> = flow {
-        try {
-            val result = authRemoteDataSource.signInWithGitHub()
-            emit(result)
-        } catch (e: Exception) {
-            emit(Result.failure(e))
+        val result = runCatching {
+            authRemoteDataSource.signInWithGitHub().getOrThrow()
         }
+        emit(result.fold(
+            onSuccess = { Result.success(it) },
+            onFailure = { e -> Result.failure(e) }
+        ))
     }
     
     override suspend fun signInWithFacebook(): Flow<Result<Unit>> = flow {
-        try {
-            val result = authRemoteDataSource.signInWithFacebook()
-            emit(result)
-        } catch (e: Exception) {
-            emit(Result.failure(e))
+        val result = runCatching {
+            authRemoteDataSource.signInWithFacebook().getOrThrow()
         }
+        emit(result.fold(
+            onSuccess = { Result.success(it) },
+            onFailure = { e -> Result.failure(e) }
+        ))
     }
     
     override suspend fun signOut(): Flow<Result<Unit>> = flow {
-        try {
-            val result = authRemoteDataSource.signOut()
-            emit(result)
-        } catch (e: Exception) {
-            emit(Result.failure(e))
+        val result = runCatching {
+            authRemoteDataSource.signOut().getOrThrow()
         }
+        emit(result.fold(
+            onSuccess = { Result.success(it) },
+            onFailure = { e -> Result.failure(e) }
+        ))
     }
     
     override suspend fun getCurrentUser(): Flow<Result<User?>> = flow {
-        try {
+        val result = runCatching {
             val isAuth = authRemoteDataSource.isAuthenticated()
             
             if (!isAuth) {
-                emit(Result.success(null))
-                return@flow
+                return@runCatching null
             }
             
             val profileResult = authRemoteDataSource.getCurrentUserProfile()
             
             if (profileResult.isSuccess) {
-                val user = profileResult.getOrNull()?.toDomain()
-                emit(Result.success(user))
+                profileResult.getOrNull()?.toDomain()
             } else {
-                emit(Result.success(null))
+                // Si el perfil no existe, intentar crearlo usando los metadatos del usuario
+                val userInfoResult = authRemoteDataSource.getCurrentUser()
+                val userInfo = userInfoResult.getOrNull()
+                
+                if (userInfo != null) {
+                    // Obtener metadatos del usuario
+                    val metadataResult = authRemoteDataSource.getUserMetadata()
+                    val metadata = metadataResult.getOrNull() ?: mapOf(
+                        "full_name" to "Usuario",
+                        "role" to "estudiante"
+                    )
+                    
+                    val fullName = metadata["full_name"] ?: "Usuario"
+                    val role = metadata["role"] ?: "estudiante"
+                    val userEmail = userInfo.email ?: ""
+                    
+                    if (userEmail.isNotBlank()) {
+                        val createProfileResult = authRemoteDataSource.createProfile(
+                            userId = userInfo.id,
+                            email = userEmail,
+                            fullName = fullName,
+                            role = role
+                        )
+                        
+                        createProfileResult.getOrNull()?.toDomain()
+                    } else {
+                        null
+                    }
+                } else {
+                    null
+                }
             }
-        } catch (e: Exception) {
-            emit(Result.failure(e))
         }
+        
+        // Emitir el resultado fuera del runCatching
+        emit(result.fold(
+            onSuccess = { user -> Result.success(user) },
+            onFailure = { e -> Result.failure(e) }
+        ))
     }
     
     override suspend fun isAuthenticated(): Boolean {
@@ -160,36 +229,38 @@ class AuthRepositoryImpl @Inject constructor(
     }
     
     override suspend fun sendPasswordResetEmail(email: String): Flow<Result<Unit>> = flow {
-        try {
-            val result = authRemoteDataSource.sendPasswordResetEmail(email)
-            emit(result)
-        } catch (e: Exception) {
-            emit(Result.failure(e))
+        val result = runCatching {
+            authRemoteDataSource.sendPasswordResetEmail(email).getOrThrow()
         }
+        emit(result.fold(
+            onSuccess = { Result.success(it) },
+            onFailure = { e -> Result.failure(e) }
+        ))
     }
     
     override suspend fun updatePassword(newPassword: String): Flow<Result<Unit>> = flow {
-        try {
-            val result = authRemoteDataSource.updatePassword(newPassword)
-            emit(result)
-        } catch (e: Exception) {
-            emit(Result.failure(e))
+        val result = runCatching {
+            authRemoteDataSource.updatePassword(newPassword).getOrThrow()
         }
+        emit(result.fold(
+            onSuccess = { Result.success(it) },
+            onFailure = { e -> Result.failure(e) }
+        ))
     }
     
     override suspend fun updateProfile(fullName: String?, avatarUrl: String?): Flow<Result<User>> = flow {
-        try {
-            val result = authRemoteDataSource.updateUserProfile(fullName, avatarUrl)
-            
-            if (result.isSuccess) {
-                val user = result.getOrNull()!!.toDomain()
-                emit(Result.success(user))
+        val result = runCatching {
+            val profileResult = authRemoteDataSource.updateUserProfile(fullName, avatarUrl)
+            if (profileResult.isSuccess) {
+                profileResult.getOrNull()!!.toDomain()
             } else {
-                emit(Result.failure(result.exceptionOrNull()!!))
+                throw profileResult.exceptionOrNull() ?: Exception("Error al actualizar perfil")
             }
-        } catch (e: Exception) {
-            emit(Result.failure(e))
         }
+        emit(result.fold(
+            onSuccess = { user -> Result.success(user) },
+            onFailure = { e -> Result.failure(e) }
+        ))
     }
 }
 

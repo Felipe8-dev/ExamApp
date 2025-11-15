@@ -5,6 +5,7 @@ import com.example.examapp.data.models.ExamAttemptInsertDto
 import com.example.examapp.data.models.QuestionAnswerDto
 import com.example.examapp.data.models.QuestionAnswerInsertDto
 import com.example.examapp.domain.entities.ExamAttempt
+import com.example.examapp.domain.entities.ExamStatus
 import com.example.examapp.domain.entities.QuestionAttempt
 import java.time.Instant
 import java.time.LocalDateTime
@@ -23,7 +24,7 @@ object ExamAttemptMapper {
             id = id,
             examId = examId,
             studentId = studentId,
-            status = status,
+            status = parseStatus(status),
             score = score,
             totalPointsEarned = totalPointsEarned,
             totalPointsPossible = totalPointsPossible,
@@ -37,6 +38,19 @@ object ExamAttemptMapper {
     }
     
     /**
+     * Convierte String a ExamStatus
+     */
+    private fun parseStatus(status: String): ExamStatus {
+        return when (status.lowercase()) {
+            "in_progress" -> ExamStatus.IN_PROGRESS
+            "completed" -> ExamStatus.COMPLETED
+            "abandoned" -> ExamStatus.ABANDONED
+            "timed_out" -> ExamStatus.TIMED_OUT
+            else -> ExamStatus.IN_PROGRESS
+        }
+    }
+    
+    /**
      * Convierte ExamAttempt a ExamAttemptInsertDto
      */
     fun ExamAttempt.toInsertDto(): ExamAttemptInsertDto {
@@ -44,8 +58,21 @@ object ExamAttemptMapper {
             examId = examId,
             studentId = studentId,
             attemptNumber = attemptNumber,
-            status = status
+            status = statusToString(status)
         )
+    }
+    
+    /**
+     * Convierte ExamStatus a String
+     */
+    private fun statusToString(status: ExamStatus): String {
+        return when (status) {
+            ExamStatus.IN_PROGRESS -> "in_progress"
+            ExamStatus.COMPLETED -> "completed"
+            ExamStatus.ABANDONED -> "abandoned"
+            ExamStatus.TIMED_OUT -> "timed_out"
+            else -> "in_progress"
+        }
     }
     
     /**

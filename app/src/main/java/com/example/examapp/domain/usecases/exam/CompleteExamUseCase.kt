@@ -4,6 +4,7 @@ import com.example.examapp.domain.entities.ExamAttempt
 import com.example.examapp.domain.entities.ExamStatus
 import com.example.examapp.domain.repositories.ExamAttemptRepository
 import com.example.examapp.domain.repositories.AIRepository
+import java.time.LocalDateTime
 import javax.inject.Inject
 
 class CompleteExamUseCase @Inject constructor(
@@ -13,8 +14,8 @@ class CompleteExamUseCase @Inject constructor(
     suspend operator fun invoke(examAttempt: ExamAttempt, finalScore: Double): Result<ExamAttempt> {
         val completedAttempt = examAttempt.copy(
             status = ExamStatus.COMPLETED,
-            finalScore = finalScore,
-            completedAt = System.currentTimeMillis().toString()
+            score = finalScore,
+            completedAt = LocalDateTime.now()
         )
         return examAttemptRepository.updateExamAttempt(completedAttempt)
     }

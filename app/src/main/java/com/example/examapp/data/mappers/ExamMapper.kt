@@ -46,7 +46,7 @@ object ExamMapper {
     fun Exam.toInsertDto(): ExamInsertDto {
         return ExamInsertDto(
             title = title,
-            description = description.takeIf { it.isNotEmpty() },
+            description = description?.takeIf { it.isNotEmpty() },
             professorId = professorId,
             subject = subject,
             durationMinutes = durationMinutes,
@@ -92,6 +92,17 @@ object ExamMapper {
     }
     
     /**
+     * Convierte LocalDateTime a String ISO 8601
+     * Maneja tanto valores nullable como no-nullable
+     */
+    private fun formatDateTime(dateTime: LocalDateTime?): String? {
+        return dateTime?.let {
+            val instant = it.atZone(ZoneId.systemDefault()).toInstant()
+            instant.toString()
+        }
+    }
+    
+    /**
      * Parsea string ISO 8601 a LocalDateTime
      */
     private fun parseDateTime(isoString: String): LocalDateTime {
@@ -101,14 +112,6 @@ object ExamMapper {
         } catch (e: Exception) {
             LocalDateTime.now()
         }
-    }
-    
-    /**
-     * Formatea LocalDateTime a string ISO 8601
-     */
-    private fun formatDateTime(dateTime: LocalDateTime): String {
-        val instant = dateTime.atZone(ZoneId.systemDefault()).toInstant()
-        return instant.toString()
     }
 }
 

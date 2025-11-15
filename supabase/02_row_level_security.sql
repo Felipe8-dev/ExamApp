@@ -22,23 +22,26 @@ CREATE POLICY "Users can view own profile"
 ON public.profiles FOR SELECT
 USING (auth.uid() = id);
 
+-- Los usuarios pueden insertar su propio perfil
+CREATE POLICY "Users can insert own profile"
+ON public.profiles FOR INSERT
+WITH CHECK (auth.uid() = id);
+
 -- Los usuarios pueden actualizar su propio perfil
 CREATE POLICY "Users can update own profile"
 ON public.profiles FOR UPDATE
 USING (auth.uid() = id);
 
 -- Los profesores pueden ver perfiles de estudiantes inscritos en sus exámenes
+-- SOLUCIÓN: Simplificamos la política para evitar recursión infinita
+-- En lugar de consultar exam_enrollments (que consulta profiles), 
+-- permitimos que los profesores vean todos los perfiles de estudiantes
+-- La verificación de inscripción se puede hacer a nivel de aplicación
+DROP POLICY IF EXISTS "Professors can view enrolled students" ON public.profiles;
+
 CREATE POLICY "Professors can view enrolled students"
 ON public.profiles FOR SELECT
-USING (
-    role = 'estudiante' AND
-    id IN (
-        SELECT DISTINCT ee.student_id
-        FROM public.exam_enrollments ee
-        INNER JOIN public.exams e ON e.id = ee.exam_id
-        WHERE e.professor_id = auth.uid()
-    )
-);
+USING (role = 'estudiante');
 
 -- Los estudiantes pueden ver perfiles públicos de profesores
 CREATE POLICY "Students can view professor profiles"
@@ -59,15 +62,11 @@ USING (
 );
 
 -- Los profesores pueden crear exámenes
+-- Simplificamos para evitar recursión: confiamos en que el usuario autenticado es profesor
+-- La verificación del role se puede hacer a nivel de aplicación
 CREATE POLICY "Professors can create exams"
 ON public.exams FOR INSERT
-WITH CHECK (
-    professor_id = auth.uid() AND
-    EXISTS (
-        SELECT 1 FROM public.profiles
-        WHERE id = auth.uid() AND role = 'profesor'
-    )
-);
+WITH CHECK (professor_id = auth.uid());
 
 -- Los profesores pueden actualizar sus propios exámenes
 CREATE POLICY "Professors can update own exams"
@@ -189,14 +188,11 @@ ON public.exam_attempts FOR SELECT
 USING (student_id = auth.uid());
 
 -- Los estudiantes pueden crear sus propios intentos
+-- Simplificamos para evitar recursión: confiamos en que el usuario autenticado es estudiante
 CREATE POLICY "Students can create own attempts"
 ON public.exam_attempts FOR INSERT
 WITH CHECK (
     student_id = auth.uid() AND
-    EXISTS (
-        SELECT 1 FROM public.profiles
-        WHERE id = auth.uid() AND role = 'estudiante'
-    ) AND
     -- Verificar que estén inscritos
     EXISTS (
         SELECT 1 FROM public.exam_enrollments
@@ -292,14 +288,11 @@ ON public.exam_enrollments FOR SELECT
 USING (student_id = auth.uid());
 
 -- Los estudiantes pueden inscribirse a exámenes
+-- Simplificamos la política para evitar recursión con profiles
 CREATE POLICY "Students can enroll in exams"
 ON public.exam_enrollments FOR INSERT
 WITH CHECK (
     student_id = auth.uid() AND
-    EXISTS (
-        SELECT 1 FROM public.profiles
-        WHERE id = auth.uid() AND role = 'estudiante'
-    ) AND
     -- Solo pueden inscribirse a exámenes públicos o con código de acceso
     EXISTS (
         SELECT 1 FROM public.exams

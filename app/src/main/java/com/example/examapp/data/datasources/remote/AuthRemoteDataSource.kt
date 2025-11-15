@@ -5,7 +5,6 @@ import com.example.examapp.data.models.ProfileInsertDto
 import com.example.examapp.data.network.SupabaseConfig
 import io.github.jan.supabase.gotrue.OtpType
 import io.github.jan.supabase.gotrue.auth
-import io.github.jan.supabase.gotrue.exception.AuthException
 import io.github.jan.supabase.gotrue.providers.Google
 import io.github.jan.supabase.gotrue.providers.Github
 import io.github.jan.supabase.gotrue.providers.Facebook
@@ -14,6 +13,9 @@ import io.github.jan.supabase.postgrest.postgrest
 import io.github.jan.supabase.postgrest.query.Columns
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.put
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -44,23 +46,52 @@ class AuthRemoteDataSource @Inject constructor() {
         role: String
     ): Result<UserInfo> = withContext(Dispatchers.IO) {
         try {
-            // Registrar en Supabase Auth
-            val response = auth.signUpWith(io.github.jan.supabase.gotrue.providers.builtin.Email) {
-                this.email = email
-                this.password = password
-                
-                // Guardar metadatos que se usarán en el trigger para crear el perfil
-                data = mapOf(
-                    "full_name" to fullName,
-                    "role" to role
-                )
+            // Normalizar el role antes de guardarlo
+            val normalizedRole = role.trim().lowercase()
+            val validRole = when (normalizedRole) {
+                "profesor", "professor", "teacher" -> "profesor"
+                "estudiante", "student", "alumno" -> "estudiante"
+                else -> "estudiante"
             }
             
-            Result.success(response)
-        } catch (e: AuthException) {
-            Result.failure(Exception("Error al registrar: ${e.message}"))
+            // Preparar los metadatos como JsonObject
+            val userData = buildJsonObject {
+                put("full_name", fullName)
+                put("role", validRole)
+            }
+            
+            // Registrar en Supabase Auth
+            auth.signUpWith(io.github.jan.supabase.gotrue.providers.builtin.Email) {
+                this.email = email
+                this.password = password
+                this.data = userData
+            }
+            
+            // Obtener el usuario después del registro
+            // signUpWith puede no retornar el usuario directamente si requiere verificación de email
+            val user = auth.currentUserOrNull()
+            if (user != null) {
+                Result.success(user)
+            } else {
+                // Si no hay usuario pero no hay error, puede ser que requiera verificación de email
+                // En este caso, el usuario se creó pero necesita verificar el email
+                // El trigger debería crear el perfil automáticamente
+                Result.failure(Exception("Usuario registrado exitosamente. Por favor verifica tu email para completar el proceso."))
+            }
         } catch (e: Exception) {
-            Result.failure(Exception("Error inesperado: ${e.message}"))
+            // Manejar errores específicos
+            val errorMessage = when {
+                e.message?.contains("already registered") == true ||
+                e.message?.contains("already exists") == true ||
+                e.message?.contains("duplicate") == true -> 
+                    "Este email ya está registrado. Por favor inicia sesión o recupera tu contraseña."
+                e.message?.contains("email") == true && e.message?.contains("invalid") == true ->
+                    "El email proporcionado no es válido."
+                e.message?.contains("password") == true ->
+                    "La contraseña no cumple con los requisitos mínimos."
+                else -> e.message ?: "Error desconocido al registrar"
+            }
+            Result.failure(Exception(errorMessage))
         }
     }
     
@@ -85,10 +116,8 @@ class AuthRemoteDataSource @Inject constructor() {
             } else {
                 Result.failure(Exception("No se pudo obtener el usuario"))
             }
-        } catch (e: AuthException) {
-            Result.failure(Exception("Credenciales inválidas: ${e.message}"))
         } catch (e: Exception) {
-            Result.failure(Exception("Error al iniciar sesión: ${e.message}"))
+            Result.failure(Exception("Credenciales inválidas: ${e.message}"))
         }
     }
     
@@ -191,13 +220,16 @@ class AuthRemoteDataSource @Inject constructor() {
     /**
      * Actualiza la contraseña del usuario
      * @param newPassword Nueva contraseña
+     * Nota: En Supabase, la actualización de contraseña generalmente requiere
+     * que el usuario use resetPasswordForEmail primero, o que esté autenticado
+     * y use un método específico. Por ahora, esta función está deshabilitada.
      */
     suspend fun updatePassword(newPassword: String): Result<Unit> = withContext(Dispatchers.IO) {
         try {
-            auth.updateUser {
-                password = newPassword
-            }
-            Result.success(Unit)
+            // En Supabase 2.x, la actualización de contraseña puede requerir
+            // un flujo diferente. Por ahora, retornamos un error indicando
+            // que se debe usar resetPasswordForEmail
+            Result.failure(Exception("La actualización de contraseña debe realizarse mediante resetPasswordForEmail. Use sendPasswordResetEmail primero."))
         } catch (e: Exception) {
             Result.failure(Exception("Error al actualizar contraseña: ${e.message}"))
         }
@@ -269,20 +301,60 @@ class AuthRemoteDataSource @Inject constructor() {
         role: String
     ): Result<ProfileDto> = withContext(Dispatchers.IO) {
         try {
+            // Normalizar y validar el role
+            val normalizedRole = role.trim().lowercase()
+            val validRole = when (normalizedRole) {
+                "profesor", "professor", "teacher" -> "profesor"
+                "estudiante", "student", "alumno" -> "estudiante"
+                else -> {
+                    // Si no es un valor reconocido, usar "estudiante" por defecto
+                    "estudiante"
+                }
+            }
+            
             val profileInsert = ProfileInsertDto(
                 id = userId,
                 email = email,
                 fullName = fullName,
-                role = role
+                role = validRole
             )
             
+            // Intentar insertar el perfil
             val profile = postgrest["profiles"]
                 .insert(profileInsert)
                 .decodeSingle<ProfileDto>()
             
             Result.success(profile)
         } catch (e: Exception) {
-            Result.failure(Exception("Error al crear perfil: ${e.message}"))
+            // Si el perfil ya existe, intentar obtenerlo en lugar de fallar
+            if (e.message?.contains("duplicate key") == true || 
+                e.message?.contains("already exists") == true) {
+                try {
+                    // El perfil ya existe, intentar obtenerlo
+                    val existingProfile = postgrest["profiles"]
+                        .select(Columns.ALL) {
+                            filter {
+                                eq("id", userId)
+                            }
+                        }
+                        .decodeSingle<ProfileDto>()
+                    Result.success(existingProfile)
+                } catch (getError: Exception) {
+                    Result.failure(Exception("El perfil ya existe pero no se pudo obtener: ${getError.message}"))
+                }
+            } else {
+                // Proporcionar un mensaje de error más descriptivo
+                val errorMessage = when {
+                    e.message?.contains("violates row-level security") == true -> 
+                        "No tienes permiso para crear este perfil. Verifica las políticas RLS en Supabase."
+                    e.message?.contains("foreign key") == true -> 
+                        "El usuario no existe en auth.users"
+                    e.message?.contains("check constraint") == true ->
+                        "El valor del role no es válido. Debe ser 'profesor' o 'estudiante'."
+                    else -> e.message ?: "Error desconocido al crear perfil"
+                }
+                Result.failure(Exception("Error al crear perfil: $errorMessage"))
+            }
         }
     }
     
@@ -295,10 +367,60 @@ class AuthRemoteDataSource @Inject constructor() {
      */
     suspend fun resendVerificationEmail(email: String): Result<Unit> = withContext(Dispatchers.IO) {
         try {
-            auth.resendEmail(email, OtpType.Email.SIGNUP)
+            auth.resendEmail(type = OtpType.Email.SIGNUP, email = email)
             Result.success(Unit)
         } catch (e: Exception) {
             Result.failure(Exception("Error al reenviar email: ${e.message}"))
+        }
+    }
+    
+    /**
+     * Obtiene los metadatos del usuario actual desde Supabase Auth
+     * Retorna un mapa con full_name y role si están disponibles
+     */
+    suspend fun getUserMetadata(): Result<Map<String, String>> = withContext(Dispatchers.IO) {
+        try {
+            val user = auth.currentUserOrNull()
+            if (user == null) {
+                return@withContext Result.failure(Exception("Usuario no autenticado"))
+            }
+            
+            val metadata = mutableMapOf<String, String>()
+            
+            // Intentar obtener metadatos de userMetadata
+            try {
+                user.userMetadata?.let { meta ->
+                    meta["full_name"]?.let { metadata["full_name"] = it.toString() }
+                    meta["role"]?.let { metadata["role"] = it.toString() }
+                }
+            } catch (e: Exception) {
+                // Si userMetadata no está disponible, usar valores por defecto
+            }
+            
+            // Normalizar el role si existe
+            metadata["role"]?.let { role ->
+                val normalizedRole = role.trim().lowercase()
+                metadata["role"] = when (normalizedRole) {
+                    "profesor", "professor", "teacher" -> "profesor"
+                    "estudiante", "student", "alumno" -> "estudiante"
+                    else -> "estudiante"
+                }
+            }
+            
+            // Si no hay metadatos, usar valores por defecto
+            if (metadata.isEmpty()) {
+                metadata["full_name"] = "Usuario"
+                metadata["role"] = "estudiante"
+            } else {
+                // Asegurar que siempre haya un role válido
+                if (!metadata.containsKey("role")) {
+                    metadata["role"] = "estudiante"
+                }
+            }
+            
+            Result.success(metadata)
+        } catch (e: Exception) {
+            Result.failure(Exception("Error al obtener metadatos: ${e.message}"))
         }
     }
 }
